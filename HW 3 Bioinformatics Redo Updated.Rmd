@@ -1,0 +1,336 @@
+---
+title: "HW 3 Bioinformatics Re-do"
+author: "Group 9"
+date: "2024-12-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+# load libraries
+library(tximport)
+library(readr)
+library(ggplot2)
+library(biomaRt)
+library(tibble)
+library(Biostrings)
+library(tidyr)
+library(DESeq2)
+library(pheatmap)
+```
+
+1. Mapping
+```{bash}
+# unzip files
+gunzip -c MCL1-LA_BC2CTUACXX_GATCAG_L001_R1.fastq.gz > MCL1-LA_BC2CTUACXX_GATCAG_L001_R1.fastq
+gunzip -c Mus_musculus.GRCm39.cdna.all.fa.gz > Mus_musculus.GRCm39.cdna.all.fa
+gunzip -c GSE60450_Lactation-GenewiseCounts.txt.gz > GSE60450_Lactation-GenewiseCounts.txt
+# build index and quantify
+kallisto index -i mm10_index Mus_musculus.GRCm39.cdna.all.fa
+kallisto quant -i mm10_index -o output_dir -l 260 --single -s 20 MCL1-LA_BC2CTUACXX_GATCAG_L001_R1.fastq
+```
+```{r}
+GSE60450_counts_clean <- read.delim("GSE60450_Lactation-GenewiseCounts.txt", header = TRUE, row.names = 1)
+```
+```{r}
+# load cDNA
+fasta_file <- "Mus_musculus.GRCm39.cdna.all.fa"
+fasta_sequences <- readDNAStringSet(fasta_file)
+# extract 
+headers <- names(fasta_sequences)
+# parse headers to get transcript IDs and gene IDs
+transcript_ids <- sapply(headers, function(x) strsplit(x, " ")[[1]][1])
+gene_ids <- sapply(headers, function(x) strsplit(strsplit(x, "gene:")[[1]][2], " ")[[1]][1])
+# create the tx2gene data frame
+tx2gene <- data.frame(TXNAME = transcript_ids, GENEID = gene_ids, stringsAsFactors = FALSE)
+# save tx2gene to a CSV file
+write.csv(tx2gene, "tx2gene.csv", row.names = FALSE)
+# remove the version numbers from the GENEID column in tx2gene
+tx2gene$GENEID <- gsub("\\.\\d+$", "", tx2gene$GENEID)
+```
+```{r}
+# path to Kallisto abundance.tsv file
+files <- file.path("output_dir", "abundance.tsv")
+# import Kallisto counts
+txi <- tximport(files, type = "kallisto", tx2gene = tx2gene, countsFromAbundance = "lengthScaledTPM")
+# Preview the gene-level counts from tximport
+head(txi$counts)
+txi_counts <- txi$counts
+```
+```{r}
+# use biomart to get transcript-to-gene mappings
+ensembl <- useMart(biomart = "ensembl", 
+                   dataset = "mmusculus_gene_ensembl", 
+                   host = "https://useast.ensembl.org")
+# get Entrez IDs for Ensembl gene IDs
+entrez_mapping <- getBM(attributes = c("ensembl_gene_id", "entrezgene_id"), mart = ensembl)
+# look at the first few rows of the mapping
+head(entrez_mapping)
+colnames(txi_counts)[1] <- "Gene_Counts"
+# convert to df
+txi_counts <- as.data.frame(txi_counts)
+txi_counts <- rownames_to_column(txi_counts, var = "Ensembl_ID")
+```
+```{r}
+# merge the transcript-to-gene mapping with the Entrez IDs (from biomaRt)
+gene_map <- merge(txi_counts, entrez_mapping, by.x = "Ensembl_ID", by.y = "ensembl_gene_id")
+# preview the updated txi mapping with Entrez IDs
+head(gene_map)
+```
+```{r}
+GSE60450_counts_clean <- rownames_to_column(GSE60450_counts_clean, var = "entrezgene_id")
+# filter GEO data to contain only the genes present in gene_map
+GSE60450_counts_clean <- GSE60450_counts_clean[GSE60450_counts_clean$entrezgene_id %in% gene_map$entrezgene_id, ]
+counts_long <- merge(GSE60450_counts_clean, gene_map, by = "entrezgene_id")
+```
+```{r}
+# identify the column name that starts with "mcl1.la"
+mcl1_column <- grep("^MCL1\\.LA", names(counts_long), value = TRUE)
+# calculate Pearson's correlation
+correlation <- cor(counts_long$Gene_Counts, counts_long[[mcl1_column]], method = 'pearson')
+print(paste("Pearson Correlation:", round(correlation, 2)))
+```
+
+```{r}
+# plot  
+ggplot(counts_long, aes(x = counts_long$Gene_Counts, y = counts_long[[mcl1_column]])) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Comparison of GEO_counts and Gene_Counts",
+       x = "Gene Counts",
+       y = "GEO Counts") +
+  theme_minimal() 
+```
+
+2. Pre-processing
+```{r}
+# load metadata
+sample_metadata <- read.csv("GSE60450_sample_data.csv")
+```
+```{r}
+# filter
+filtered_counts <- GSE60450_counts_clean[rowSums(GSE60450_counts_clean >= 5) >= 3, ]
+filtered_counts$GeneID <- rownames(filtered_counts)
+lengths <- filtered_counts$Length
+filtered_counts <- filtered_counts[, -1]  
+# reshape the data into a long format
+gene_counts_long <- gather(filtered_counts, key = "Sample", value = "Count", -GeneID)
+# create a boxplot or violin plot of the counts per sample
+ggplot(gene_counts_long, aes(x = Sample, y = Count)) +
+  scale_y_log10() +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribution of Gene Counts per Sample")
+
+sample_ids <- colnames(filtered_counts)[1:12]
+sample_ids
+# calculate TPM 
+tpm <- as.matrix(filtered_counts[, -ncol(filtered_counts)]) / lengths
+tpm <- tpm %*% diag(1e6 / colSums(tpm))
+colnames(tpm) <- sample_ids
+# convert to df
+tpm_df <- as.data.frame(tpm)
+rownames(tpm_df) <- rownames(filtered_counts)
+```
+```{r}
+# add GeneID as a column in the TPM data frame
+tpm_df$GeneID <- rownames(tpm_df)
+# reshape the data into a long format
+tpm_long <- gather(tpm_df, key = "Sample", value = "TPM", -GeneID)
+# plot boxplot of TPM distribution per sample
+ggplot(tpm_long, aes(x = Sample, y = TPM)) +
+  scale_y_log10() +
+  geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = "Distribution of TPM per Sample")
+```
+```{r}
+# calculate the 1000 most variable genes:
+# calculate variance for each gene
+sample_ids = colnames(filtered_counts)[1:12]
+gene_variance <- apply(tpm_df[, sample_ids], 1, var)
+# select the 1000 most variable genes
+top_genes <- names(sort(gene_variance, decreasing = TRUE)[1:1000])
+tpm_top <- tpm_df[top_genes, -ncol(tpm_df)]
+
+# perform PCA:
+# transpose the matrix for PCA
+tpm_top_t <- t(tpm_top)
+pca <- prcomp(tpm_top_t, scale. = TRUE)
+# convert PCA results into a data frame
+pca_df <- as.data.frame(pca$x)
+# add metadata
+pca_df$Sample <- rownames(pca_df)
+
+# check for duplicates and merge data
+if(any(duplicated(sample_metadata$Sample))) {
+  sample_metadata <- sample_metadata[!duplicated(sample_metadata$Sample), ]
+}
+# extract the portion of `Sample` that matches the format in `sample_name`
+pca_df$Sample_Short <- sub("_.*", "", gsub("\\.", "-", pca_df$Sample))
+# perform the merge using the modified column
+pca_df <- merge(pca_df, sample_metadata, by.x = "Sample_Short", by.y = "sample_name")
+# plot PCA
+ggplot(pca_df, aes(x = PC1, y = PC2, color = cell, shape = status)) +
+  geom_point(size = 3) +
+  labs(title = "PCA of TPM Matrix (Top 1000 Variable Genes)",
+       x = "PC1",
+       y = "PC2") +
+  theme_minimal()
+```
+
+3. Differential Gene Expression
+```{r}
+colnames(filtered_counts) <- substr(colnames(filtered_counts), 1, 7)
+colnames(filtered_counts) <- gsub("\\.", "-", colnames(filtered_counts))
+rownames(sample_metadata) <- sample_metadata$sample_name
+```
+```{r}
+# reorder metadata to match count matrix columns
+sample_metadata <- sample_metadata[colnames(filtered_counts), ]
+sample_metadata <- sample_metadata[-nrow(sample_metadata), ]
+```
+```{r}
+# convert counts to integer matrix
+filtered_counts <- as.matrix(filtered_counts)
+mode(filtered_counts) <- "integer"
+# remove counts of 0
+filtered_counts <- filtered_counts[rowSums(filtered_counts) > 0, ]
+filtered_counts <- filtered_counts[, -ncol(filtered_counts)]
+names(sample_metadata)[names(sample_metadata) == "status"] <- "stage"
+
+# convert columns
+sample_metadata$cell <- as.factor(sample_metadata$cell)
+sample_metadata$stage <- as.factor(sample_metadata$stage)
+
+# create DESeq2 data
+dds <- DESeqDataSetFromMatrix(countData = filtered_counts, colData = sample_metadata, design = ~ cell + stage)
+# run DESeq analysis
+dds <- DESeq(dds)
+res_stage <- results(dds, contrast = c("stage", "pregrant", "lactate"))
+
+# define thresholds 
+log2FC_threshold <- 1
+padj_threshold <- 0.05
+
+# gene classification
+res_stage$significance <- "stable"
+res_stage$significance[res_stage$log2FoldChange > log2FC_threshold & res_stage$padj < padj_threshold] <- "up"
+res_stage$significance[res_stage$log2FoldChange < -log2FC_threshold & res_stage$padj < padj_threshold] <- "down"
+```
+```{r}
+# plot MA Plot 
+plotMA(res_stage, ylim = c(-5, 5), main = "MA Plot (Stage Contrast)")
+points(res_stage$baseMean, res_stage$log2FoldChange, col = ifelse(res_stage$significance == "up", "red",
+                                           ifelse(res_stage$significance == "down", "green", "black")))
+legend("topright", 
+       legend = c("up", "down", "stable"), 
+       col = c("red", "green", "black"), 
+       pch = 1, 
+       pt.cex = 1.5)
+```
+```{r}
+# plot Volcano Plot
+ggplot(res_stage, aes(x = log2FoldChange, y = -log10(padj), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("down" = "green", "up" = "red", "stable" = "black")) +
+  labs(title = "Volcano Plot (Stages)", x = "Log2 Fold Change", y = "-Log10 Adjusted p-value") +
+  theme_minimal()
+```
+```{r}
+res_cell <- results(dds, contrast = c("cell", "basal", "luminal"))
+
+# define thresholds 
+log2FC_threshold <- 1
+padj_threshold <- 0.05
+
+# gene classification
+res_cell$significance <- "stable"
+res_cell$significance[res_cell$log2FoldChange > log2FC_threshold & res_cell$padj < padj_threshold] <- "up"
+res_cell$significance[res_cell$log2FoldChange < -log2FC_threshold & res_cell$padj < padj_threshold] <- "down"
+
+# plot MA Plot 
+plotMA(res_cell, ylim = c(-10, 10), main = "MA Plot (Cell Contrast)")
+points(res_cell$baseMean, res_cell$log2FoldChange, col = ifelse(res_cell$significance == "up", "red",
+                                           ifelse(res_cell$significance == "down", "green", "black")))
+
+legend("topright", 
+       legend = c("up", "down", "stable"), 
+       col = c("red", "green", "black"), 
+       pch = 1, 
+       pt.cex = 1.5)
+```
+```{r}
+# plot volcano plot
+ggplot(res_cell, aes(x = log2FoldChange, y = -log10(padj), color = significance)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(values = c("down" = "green", "up" = "red", "stable" = "black")) +
+  labs(title = "Volcano Plot (Cell Contrast)", x = "Log2 Fold Change", y = "-Log10 Adjusted p-value") +
+  ylim(0, 300) +
+  theme_minimal()
+```
+```{r}
+# regularized log transformation
+rld <- counts(dds,normalized=TRUE)
+
+# filter
+sig_genes_stage <- rownames(res_stage[res_stage$significance != "stable", ])
+
+# extract normalized expression data for significant genes by stage
+mat_stage <- rld[sig_genes_stage, ]
+
+# sample annotations by `stage`
+annotation_stage <- data.frame(cell = colData(dds)$cell,
+                              stage = colData(dds)$stage)
+rownames(annotation_stage) <- colnames(mat_stage)
+
+# normalize 
+mat_stage_scaled <- t(scale(t(mat_stage)))
+
+# plot heatmap
+pheatmap(
+  mat_stage_scaled, 
+  annotation_col = annotation_stage, 
+  cluster_cols = TRUE, 
+  show_rownames = FALSE,
+  main = "Heatmap of Differentially Expressed Genes by Stage"
+)
+
+# filter
+sig_genes_cell <- rownames(res_cell[res_cell$significance != "stable", ])
+
+# extract normalized expression data for significant genes by cell
+mat_cell <- rld[sig_genes_cell, ]
+
+# sample annotations by `cell`
+annotation_cell <- data.frame(cell = colData(dds)$cell,
+                              stage = colData(dds)$stage)
+rownames(annotation_cell) <- colnames(mat_cell)
+
+# normalize 
+mat_cell_scaled <- t(scale(t(mat_cell)))
+
+# plot heatmap
+pheatmap(
+  mat_cell_scaled, 
+  annotation_col = annotation_cell, 
+  cluster_cols = TRUE, 
+  show_rownames = FALSE,
+  main = "Heatmap of Differentially Expressed Genes by Cell Type"
+)
+```
+```{r}
+# The major trends in gene expression, such as clusters of highly expressed genes (orange regions) and clusters of lowly expressed genes (blue regions), are consistent across both heatmaps. 
+
+#Some opposing Patterns observed are : 
+#- Similar to the stage heatmap, the cell heatmap also shows contrasting expression levels between LA-LD samples and other groups, reinforcing the hypothesis of stage-specific and cell-specific regulatory roles. 
+#The hierarchical clustering of samples is similar in both heatmaps, indicating that the same underlying gene expression patterns contribute to differences both in stages and cell types. 
+#The stage heatmap shows the dominant influence of lactation (lactate stage) across most samples, with gene expression changes being grouped primarily by the stage. 
+#The cell heatmap, however, highlights the differences between basal and luminal cell types, which might explain the functional specialization within stages. 
+#The complementary nature of the heatmaps suggests that stages influence cell-specific gene expression, and vice versa. For instance: Within the lactate stage (stage heatmap), basal and luminal cells exhibit distinct expression clusters (cell heatmap). 
+#Similarly, the basal cell-specific gene expression cluster in the cell heatmap aligns with genes that are lowly expressed in the lactate stage (stage heatmap)
+
+#The two heatmaps complement each other in their portrayal of gene expression dynamics. The stage heatmap emphasizes temporal and functional changes between stages, while the cell heatmap highlights the specialization within cell types. Together, they provide a holistic view of how gene expression varies both temporally (stage) and spatially (cell type), reinforcing patterns like the contrasting LA-LD relationship across both dimensions.
+```

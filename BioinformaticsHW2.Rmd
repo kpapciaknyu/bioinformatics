@@ -1,0 +1,451 @@
+---
+title: "BioinformaticsAssignment2"
+author: "Prakruthi Harish"
+date: "2024-10-26"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+This report examines genome coverage using the Lander-Waterman Theory and applies statistical models to estimate the depth of coverage and assess the probability of covering the genome fully. Key tasks include:
+1. Calculating expected depth of coverage (λ) for given parameters.
+2. Plotting the Binomial and Poisson distributions to understand genome coverage probabilities.
+3. Using a Poisson approximation to estimate the mean depth required for 99% genome coverage.
+
+The analysis uses genome size (G), number of DNA fragments (N), and fragment length (L) as input parameters.
+
+## Question 1 
+
+#  1.1 Calculating the Expected Depth of Coverage (λ)
+
+The expected depth of coverage (λ) tells us, on average, how many reads will overlap a random position in the genome. The formula is:
+
+λ = (N X L)/ G 
+where, N = Number of DNA fragments
+L = Length of each fragment
+G = Genome size
+
+In this assignment the provided values are:
+L = 600 (approximate fragment length from Sanger Sequencing)
+G = 3×10^9 (approximate genome size for human DNA)
+N = 10^7 (total number of fragments)
+
+```{r cars}
+
+# Given values
+L <- 600       # Fragment length of each read
+G <- 3e9       # Genome size in base pairs
+N <- 1e7       # Number of reads/ fragments
+
+# Calculating expected depth of coverage
+lambda <- (N * L) / G
+lambda
+
+```
+The expected depth of coverage, λ=2, which means that each base pair in the genome is, on average, covered by 2 reads.
+
+# 1.2 Plotting the Binomial and Poisson Distributions
+
+Comparing the Binomial and Poisson distributions to analyze genome coverage probabilities for this depth of coverage (λ=2). 
+The Binomial distribution gives the exact probability of a random position being covered a specific number of times, while the Poisson distribution serves as an approximation, especially when λ is relatively low.
+p = L/G: The probability of a random position being covered by any single read.
+N = 10^7: Total number of reads.
+λ = 2: Expected depth of coverage.
+
+```{r}
+
+# Probability of coverage by a single read
+p <- L / G
+
+# Set up x values (the number of times a position might be covered)
+x_values <- 0:10  # This range covers 0 to 10 reads overlapping a position
+
+# Binomial probabilities
+binom_prob <- dbinom(x_values, size = N, prob = p)
+
+# Poisson probabilities
+pois_prob <- dpois(x_values, lambda = lambda)
+
+# Plotting
+plot(x_values, binom_prob, type = "h", col = "black", lwd = 2, 
+     ylab = "Probability", xlab = "Number of reads covering a position (x)", 
+     main = "Binomial vs Poisson Distributions")
+points(x_values, pois_prob, type = "h", col = "yellow", lwd = 2)
+legend("topright", legend = c("Binomial", "Poisson"), 
+       col = c("black", "yellow"), lty = 1, lwd = 2)
+
+
+```
+The plot shows an overlap between the Binomial (black) and Poisson (yellow) distributions, illustrating that the Poisson distribution approximates the Binomial well for this dataset. This overlap is expected because the conditions (large N and small p) make the Poisson distribution a suitable and computationally efficient approximation for genome coverage analysis, particularly when the expected depth of coverage is low.
+
+# 1.3 Calculating the Mean Depth of Coverage (λ) needed for 99% Genome Coverage and required number of reads
+
+To cover the genome by 99%, the probability of a zero-coverage gap (no reads covering a position) needs to be only 1%. Using the Poisson approximation, this translates to:
+P(no coverage) = e^−λ = 0.01
+
+To find the mean depth (λ) required, we rearrange the equation to solve for λ:
+λ = −ln(0.01)
+
+This λ value will give the average depth of coverage necessary to achieve 99% coverage, ensuring that only 1% of the genome positions remain uncovered.
+
+
+```{r}
+# Calculate the required mean depth for 99% genome coverage
+
+required_lambda <- -log(0.01)
+required_lambda
+
+```
+Since we have calculated the mean depth of coverage (λ) needed to achieve 99% genome coverage to be 4.61, we now want to calculate the total number of reads (N) required to reach this depth. The number of reads needed to achieve this level of coverage is given by:
+
+N = (λxG)/L
+
+where:
+
+λ = 4.61 (the mean depth required to ensure 99% of the genome is covered),
+G = 3X10^9 base pairs (approximate size of the human genome, assuming haploid),
+L = 600 base pairs (fragment length, as given for Sanger sequencing).
+
+
+```{r}
+
+# Calculate the required number of reads for 99% genome coverage
+G <- 3e9       # Genome size in base pairs
+L <- 600       # Fragment length in base pairs
+required_N <- (required_lambda * G) / L
+required_N
+
+
+```
+
+The calculated number of reads (N) required for 99% genome coverage is approximately 23 million. This means that, under the given conditions (λ = 4.61, G = 3 billion base pairs, and L = 600 base pairs), sequencing around 23 million fragments would provide sufficient depth to cover 99% of the genome on average. This insight is critical for designing sequencing experiments, as it helps to estimate the number of reads needed to achieve a target coverage percentage.
+
+
+## Question 2 
+
+# 2.1 Code to Simulate the Negative Binomial Process
+
+```{r}
+
+# Define the function to simulate the negative binomial process
+simulate_neg_binomial <- function(prob, size) {
+heads <- 0       # Counter for heads
+tails <- 0       # Counter for tails
+  
+# Flip the coin until the target number of heads is reached
+  while (heads < size) {
+    if (runif(1) < prob) {
+      heads <- heads + 1  # Increment heads count if we get heads
+    } else {
+      tails <- tails + 1  # Increment tails count if we get tails
+    }
+  }
+  
+  return(tails)  # Return the number of tails encountered
+}
+
+# Test the function with example parameters
+set.seed(1)  # Set a seed for reproducibility
+test_result <- simulate_neg_binomial(prob = 0.5, size = 10)
+test_result
+
+```
+
+By doing this verification step of testing the code with prob = 0.5 and size = 10, it can be said that, it took 12 tails before reaching the target of 10 heads with a probability of 0.5 per flip.
+
+# 2.2 Running the Simulation 1000 Times and Plotting the Results
+
+```{r}
+
+# Parameters for the simulation
+prob <- 0.5  # Probability of heads
+size <- 10   # Target number of heads
+
+# Run the simulation 1000 times and store the results
+set.seed(123)  # For reproducibility
+results <- replicate(1000, simulate_neg_binomial(prob, size))
+
+# Plot the histogram of the simulation results
+hist(results, breaks = 30, probability = TRUE, main = "Histogram of Simulated Tails (Negative Binomial)", 
+     xlab = "Number of Tails", col = "lightblue")
+
+# Overlay the theoretical negative binomial density
+x_vals <- 0:max(results)
+neg_binom_density <- dnbinom(x_vals, size = size, prob = prob)
+lines(x_vals, neg_binom_density, col = "red", lwd = 2)
+legend("topright", legend = c("Simulated Data", "Negative Binomial Density"), 
+       fill = c("lightblue", "red"), bty = "n")
+
+
+```
+
+Note: The dnbinom function calculates the negative binomial density using the same parameters (size = 10 and prob = 0.5).
+
+The histogram of simulated tails closely matches the theoretical negative binomial density curve (in red), indicating that the simulation accurately captures the expected distribution. Small deviations are due to random variability, but overall, the agreement between the histogram and the density curve confirms that our simulation correctly models the negative binomial process.
+
+
+# 2.3 Performing Inference on p
+
+```{r}
+
+# Set the parameters
+true_prob <- 0.5  # True probability of heads
+size <- 10        # Target number of heads
+
+# Generate 5000 random samples from the negative binomial distribution
+set.seed(123)  # For reproducibility
+samples <- rnbinom(5000, size = size, prob = true_prob)
+
+# Estimate the probability p for each sample
+# Since we know the target number of heads (size) and the total number of trials (size + tails),
+# we can estimate p as: estimated_p = size / (size + tails)
+estimates <- size / (size + samples)
+
+# Plot the histogram of the estimated probabilities
+hist(estimates, breaks = 30, probability = TRUE, main = "Histogram of Estimated p",
+     xlab = "Estimated Probability (p)", col = "lightblue")
+
+# Add vertical lines for the true value and the average estimate
+abline(v = true_prob, col = "red", lwd = 2, lty = 2)           # True probability at 0.5
+abline(v = mean(estimates), col = "blue", lwd = 2, lty = 2)     # Mean of estimated probabilities
+legend("topright", legend = c("True p", "Mean Estimate"), 
+       col = c("red", "blue"), lty = 2, lwd = 2, bty = "n")
+
+
+```
+
+
+The histogram shows the distribution of 5000 estimates for p, the probability of heads, with a true value of 0.5 (indicated by the red dashed line) and the mean of the estimates (blue dashed line). The mean estimate is slightly above 0.5, suggesting a small bias in the estimation.
+
+Overall, the estimated values are centered near the true p value, indicating that our estimator is relatively accurate, although it tends to overestimate slightly. This slight bias could result from the random variation inherent in sampling.
+
+
+## Question 3
+
+# 3.1 
+
+
+
+```{r}
+# Define URLs and local paths
+url_input <- "https://genome.med.nyu.edu/public/tsirigoslab/teaching/bioinformatics/GSE99991/wt_input_rep1.bw"
+url_H3K4me3 <- "https://genome.med.nyu.edu/public/tsirigoslab/teaching/bioinformatics/GSE99991/wt_H3K4me3_rep1.bw"
+
+# Define local paths to save the files
+local_input_path <- "/Users/akash/Documents/NYU/Fall_semester_2024-25/Bioinformatics/Homework2/wt_input_rep1.bw"
+local_H3K4me3_path <- "/Users/akash/Documents/NYU/Fall_semester_2024-25/Bioinformatics/Homework2/wt_H3K4me3_rep1.bw"
+
+# Download the files
+download.file(url_input, destfile = local_input_path, mode = "wb")
+download.file(url_H3K4me3, destfile = local_H3K4me3_path, mode = "wb")
+
+```
+
+```{r}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+```
+
+```{r}
+BiocManager::install("rtracklayer")
+
+
+```
+
+```{r}
+library(rtracklayer)
+
+```
+
+```{r}
+
+# Load the bigWig files
+bw_input <- import(local_input_path, as = "GRanges")
+bw_H3K4me3 <- import(local_H3K4me3_path, as = "GRanges")
+
+
+```
+
+Calculate the Total Count N[input] Across Chromosome X
+```{r}
+# Filter for Chromosome X only
+chromosome_x <- bw_input[seqnames(bw_input) == "chrX"]
+
+# Calculate total count (adjusting for 10 bp bin size)
+N_input <- sum(width(chromosome_x) * score(chromosome_x))
+N_input
+
+
+
+```
+
+Calculate the Total Count N[H3K4me3] and Scaling Factor S
+```{r}
+# Filter for Chromosome X in the H3K4me3 data
+chromosome_x_H3K4me3 <- bw_H3K4me3[seqnames(bw_H3K4me3) == "chrX"]
+
+# Calculate total count for H3K4me3 (adjusting for 10 bp bin size)
+N_H3K4me3 <- sum(width(chromosome_x_H3K4me3) * score(chromosome_x_H3K4me3))
+N_H3K4me3
+
+# Calculate scaling factor S
+S <- N_H3K4me3 / N_input
+S
+
+
+```
+
+Limit Analysis to the Specified Region chrX:93800000-94800000
+```{r}
+# Define the specific region on Chromosome X
+region <- GRanges("chrX", IRanges(start = 93800000, end = 94800000))
+
+# Import data for this region only
+input_region <- import(local_input_path, which = region)
+H3K4me3_region <- import(local_H3K4me3_path, which = region)
+
+
+```
+
+Calculate Centered Moving Averages (CMA) for Multiple Window Sizes
+```{r}
+
+# Install and load the zoo package
+install.packages("zoo")
+library(zoo)
+
+
+```
+calculate the CMA
+
+```{r}
+# Extract the signal values for the region
+input_values <- score(input_region)
+
+# Calculate centered moving averages for each window size
+cma_1k <- rollmean(input_values, k = 100, fill = NA, align = "center")    # 1000 bp window
+cma_5k <- rollmean(input_values, k = 500, fill = NA, align = "center")    # 5000 bp window
+cma_10k <- rollmean(input_values, k = 1000, fill = NA, align = "center")  # 10,000 bp window
+
+# View values further into each CMA calculation, starting from a position where data should appear
+head(cma_1k[!is.na(cma_1k)], 10)
+head(cma_5k[!is.na(cma_5k)], 10)
+head(cma_10k[!is.na(cma_10k)], 10)
+
+
+```
+
+ Calculate the Maximum Rate Across CMAs and Scale by S
+
+```{r}
+# Calculate wX = N[input] / Length of Chromosome X
+wX <- N_input / length(chromosome_x)
+
+# Calculate the maximum across the three CMAs for each bin
+rate <- pmax(cma_1k, cma_5k, cma_10k, na.rm = TRUE)
+
+# Scale the rate by the scaling factor S
+rate <- rate * S
+
+# Check the first few non-NA values of rate
+head(rate[!is.na(rate)], 10)
+
+```
+
+Compute Poisson Probabilities for Observed Values
+
+```{r}
+# Extract observed values for the H3K4me3 signal in the specified region
+observed_values <- score(H3K4me3_region)
+
+# Calculate Poisson probabilities for observed values
+p_values <- 1 - ppois(observed_values, lambda = rate)
+
+head(p_values[!is.na(p_values)], 10)
+```
+
+Identify Significant Peaks and Save to Bed File
+
+We are subsetting to align the lengths of rate and H3K4me3_region, ensuring that both vectors refer to the same bins in the specified genomic region. This alignment is necessary for calculating Poisson probabilities or any other analyses where rate and H3K4me3_region need to correspond bin-by-bin.
+
+```{r}
+
+# Subset rate to match H3K4me3_region based on the specified region
+rate <- rate[seq_along(H3K4me3_region)]
+
+head(rate[!is.na(rate)], 10)
+```
+
+Compute Poisson Probabilities
+
+```{r}
+
+# Extract observed values for the H3K4me3 signal within the specified region
+observed_values <- score(H3K4me3_region)
+
+# Recompute Poisson probabilities with aligned rate and observed_values
+p_values <- 1 - ppois(observed_values, lambda = rate)
+
+
+```
+
+Identify Significant Peaks and Export as a Bed File
+
+```{r}
+
+# Filter for significant peaks where p < 0.01 and p_values are not NA
+significant_peaks <- H3K4me3_region[!is.na(p_values) & p_values < 0.01]
+
+# Export significant peaks to a bed file
+export(significant_peaks, "significant_peaks.bed", format = "bed")
+
+
+```
+
+Visualize in IGV - Calculate -log10(p) and Save for IGV Visualization
+```{r}
+
+# Calculate -log10(p) values
+log10_p <- -log10(p_values)
+
+# Remove NA values from log10_p
+log10_p[is.na(log10_p)] <- NA
+
+# Replace Inf values with the maximum finite value in log10_p
+finite_log10_p <- log10_p[is.finite(log10_p)]
+max_finite_value <- max(finite_log10_p, na.rm = TRUE)
+log10_p[is.infinite(log10_p)] <- max_finite_value
+
+# Filter H3K4me3_region for non-NA values
+log10_p_bed <- data.frame(seqnames = seqnames(H3K4me3_region)[!is.na(log10_p)],
+                          start = start(H3K4me3_region)[!is.na(log10_p)],
+                          end = end(H3K4me3_region)[!is.na(log10_p)],
+                          score = log10_p[!is.na(log10_p)])
+
+# Export to bedGraph
+write.table(log10_p_bed, "log10_p_values.bedGraph", sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+```
+
+![IGV Visualization](/Users/akash/Documents/NYU/Fall_semester_2024-25/Bioinformatics/Homework2/igv.png)
+
+The IGV visualization includes multiple tracks that provide a clear picture of H3K4me3 enrichment in the region chrX:93800000-94800000:
+
+1. wt_H3K4me3_rep1.bw Track (H3K4me3 Signal): This track shows the intensity of the H3K4me3 ChIP-seq signal, where peaks represent regions of histone modification enrichment.
+Taller peaks indicate higher levels of H3K4me3, which is associated with active promoter regions or regulatory elements. Regions with strong peaks here likely represent areas where H3K4me3 is enriched, suggesting potential regulatory activity.
+
+2. wt_input_rep1.bw Track (Input Control): This is the input control track, showing background or baseline signal across the same region.
+Compare this track with the H3K4me3 signal. Regions where the H3K4me3 track has significant peaks but the input control does not indicate true H3K4me3 enrichment rather than noise. Conversely, if both tracks show peaks in the same regions, it could indicate background noise or artifacts, rather than specific H3K4me3 enrichment.
+
+3. log10_p_values.bedGraph Track (-log10(p) values): This track represents the -log10(p) values calculated from the Poisson probabilities, where each bin’s p-value measures the statistical significance of the H3K4me3 signal at that location.
+Higher -log10(p) values indicate higher statistical significance. Regions with high -log10(p) values likely correspond to meaningful H3K4me3 enrichment, reinforcing areas of interest where the ChIP-seq signal is not likely to be due to random noise.
+
+4. significant_peaks.bed Track (Significant Regions): This bed file highlights regions where the H3K4me3 signal is statistically significant (p < 0.01).
+Each peak in this track represents a bin with significant H3K4me3 enrichment. These regions should align with prominent peaks in the H3K4me3 track (wt_H3K4me3_rep1.bw) while having minimal or no signal in the input control (wt_input_rep1.bw). This alignment suggests true biological significance of the H3K4me3 peaks in these regions.
